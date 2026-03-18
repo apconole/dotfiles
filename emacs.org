@@ -1,0 +1,1240 @@
+#+TITLE: Emacs Configuration
+#+AUTHOR: Aaron Conole
+#+PROPERTY: header-args:emacs-lisp :results silent
+#+STARTUP: overview
+
+This is my Emacs configuration written as a literate program.  All code lives
+in =#+begin_src emacs-lisp= blocks and is loaded at startup via
+=org-babel-load-file= from =init.el=.
+
+Sensitive settings — email accounts, IMAP/SMTP servers, IRC credentials,
+local git repository paths — live in =private.org= / =private.el=, which is
+*not* tracked in version control.  See the [[*Private Configuration][Private Configuration]] section for
+details.
+
+* Bootstrap
+** Custom File
+
+Direct Emacs to write =M-x customize= settings to =custom.el= instead of
+appending them to this file.
+
+#+begin_src emacs-lisp
+(setq custom-file (expand-file-name "custom.el" user-emacs-directory))
+(load custom-file t t)
+#+end_src
+
+** Load Paths
+
+Add the bundled plugins and local package directories.
+
+#+begin_src emacs-lisp
+(add-to-list 'custom-theme-load-path "~/.emacs.d/plugins/solarized-emacs")
+(add-to-list 'load-path "~/.emacs.d/plugins/")
+(add-to-list 'load-path "~/.emacs.d/local/rcirc-notify")
+#+end_src
+
+** Package Management
+
+Use MELPA as the package archive.  Two helper functions handle
+install-on-demand so that the config is self-bootstrapping on a fresh machine.
+
+#+begin_src emacs-lisp
+  (require 'package)
+  (mapc (lambda (p) (push p package-archives))
+        '(("melpa-stable" . "http://melpa.org/packages/")))
+  (package-initialize)
+#+end_src
+
+Now that MELPA support is setup, we want to make sure we refresh packages.
+If we refreshed every time we started emacs, things would be slow, but we
+can setup an interval and check it every time we start.
+#+begin_src emacs-lisp
+      (defvar simple-emacs-package-refresh-interval (* 7 24 60 60)
+        "Number of seconds between automatic package refreshes (1 week).")
+
+      (defvar simple-emacs-last-package-refresh-file
+        (expand-file-name "last-package-refresh" user-emacs-directory)
+        "File storing the timestamp of the last package refresh.")
+
+      (defun simple-emacs-should-refresh-packages-p ()
+        "Return t if packages should be refreshed."
+        (let ((last-refresh (when
+      			  (file-exists-p simple-emacs-last-package-refresh-file)
+                              (string-to-number (with-temp-buffer
+                                                  (insert-file-contents
+    					       simple-emacs-last-package-refresh-file)
+                                                  (buffer-string))))))
+          (or (null last-refresh)
+              (> (float-time (current-time)) (+ last-refresh
+  					      simple-emacs-package-refresh-interval)))))
+
+      (defun simple-emacs-update-last-package-refresh ()
+        "Update the timestamp of the last package refresh."
+        (with-temp-file simple-emacs-last-package-refresh-file
+          (insert (number-to-string (float-time (current-time))))))
+
+      ;; Automatically refresh packages once a week
+      (when (simple-emacs-should-refresh-packages-p)
+        (package-refresh-contents)
+        (simple-emacs-update-last-package-refresh))
+#+end_src
+
+These will help to just pull a package if we need it.
+
+#+begin_src emacs-lisp
+(defun simple-emacs-package-install-no-require (pkgid)
+  "Install PKGID from the configured archives if it is not already present."
+  (unless (package-installed-p pkgid)
+    (package-install pkgid)))
+
+(defun simple-emacs-package-install (pkgid)
+  "Install PKGID if absent, then load it with `require'."
+  (simple-emacs-package-install-no-require pkgid)
+  (require pkgid))
+#+end_src
+
+** Feature Flags
+
+Boolean custom variables that control which optional subsystems are activated.
+Set any of these to =nil= before loading this file to skip that subsystem.
+
+#+begin_src emacs-lisp
+  (defgroup simple-emacs-plugins nil
+    "Feature flags and paths for the literate Emacs configuration."
+    :group 'convenience)
+
+  (defcustom simple-emacs-autoload-all-dev t
+    "Non-nil enables YASnippet, auto-complete, and Projectile globally."
+    :type 'boolean :group 'simple-emacs-plugins)
+
+  (defcustom simple-emacs-cxx-development t
+    "Non-nil loads the C/C++ development subsystem."
+    :type 'boolean :group 'simple-emacs-plugins)
+
+  (defcustom simple-emacs-python-development t
+    "Non-nil loads the Python development subsystem."
+    :type 'boolean :group 'simple-emacs-plugins)
+
+  (defcustom simple-emacs-web-development t
+    "Non-nil loads the web (JS/HTML/CSS) development subsystem."
+    :type 'boolean :group 'simple-emacs-plugins)
+
+  (defcustom simple-emacs-ruby-development t
+    "Non-nil loads the Ruby development subsystem."
+    :type 'boolean :group 'simple-emacs-plugins)
+
+  (defcustom simple-emacs-social-mode t
+    "Non-nil loads the IRC and Jabber chat subsystem."
+    :type 'boolean :group 'simple-emacs-plugins)
+
+  (defcustom simple-emacs-multiple-smtp nil
+    "Non-nil enables per-account SMTP routing based on the From: header."
+    :type 'boolean :group 'simple-emacs-plugins)
+
+  (defcustom simple-emacs-linux-cstyle-list '()
+    "Directories where Linux kernel style (8-space tabs, `linux' c-style) applies.
+  Populated by private.el."
+    :type '(repeat directory) :group 'simple-emacs-plugins)
+
+  (defcustom simple-emacs-tabs-are-tabs-list '()
+    "Directories where literal tab characters should be used for indentation."
+    :type '(repeat directory) :group 'simple-emacs-plugins)
+
+  ;; smtp-accounts and simple-emacs-slack-teams are populated by private.el
+  (setq smtp-accounts        '()
+        list-git-mappings    '()
+        simple-emacs-slack-teams '())
+#+end_src
+
+** Core Packages
+
+Install the foundational packages that everything else depends on.
+
+#+begin_src emacs-lisp
+  ;; Raise GC threshold during startup to avoid excessive collections
+  (setq gc-cons-threshold 20000000)
+
+  (simple-emacs-package-install 'cl-lib)
+  (simple-emacs-package-install 's)
+  (simple-emacs-package-install 'helm)
+  (simple-emacs-package-install 'multiple-cursors)
+  (simple-emacs-package-install 'auto-complete)
+  (simple-emacs-package-install 'magit)
+  (simple-emacs-package-install 'git-timemachine)
+  (simple-emacs-package-install 'expand-region)
+  (simple-emacs-package-install 'smartparens)
+  (simple-emacs-package-install 'sx)
+  (simple-emacs-package-install-no-require 'solarized-theme)
+  (simple-emacs-package-install 'flymake)
+  (simple-emacs-package-install 'org-contacts)
+  (simple-emacs-package-install-no-require 'flymake-cursor)
+  (eval-after-load 'flymake '(require 'flymake-cursor))
+#+end_src
+
+** Utility Functions
+
+Helper functions used throughout the rest of the configuration.
+
+#+begin_src emacs-lisp
+(defun get-closest-pathname (file)
+  "Return the path of FILE in the nearest ancestor directory that contains it.
+Walks upward from `default-directory'."
+  (let ((root (expand-file-name "/")))
+    (expand-file-name
+     file
+     (cl-loop for d = default-directory then (expand-file-name ".." d)
+              if (file-exists-p (expand-file-name file d)) return d
+              if (equal d root) return nil))))
+
+(defun upward-find-file (filename &optional startdir)
+  "Walk up from STARTDIR (default: \".\") until FILENAME is found.
+Returns the containing directory with a trailing slash, or nil."
+  (let ((dirname (expand-file-name (or startdir ".")))
+        (found nil)
+        (top nil))
+    (while (not (or found top))
+      (when (string= (expand-file-name dirname) "/")
+        (setq top t))
+      (if (file-exists-p (expand-file-name filename dirname))
+          (setq found t)
+        (setq dirname (expand-file-name ".." dirname))))
+    (when found (concat dirname "/"))))
+#+end_src
+
+* Private Configuration
+
+Sensitive configuration (email accounts, IMAP/SMTP servers, IRC credentials,
+GPG key IDs, local repository paths) lives in =private.el=, which is tangled
+from =private.org=.
+
+To set up on a new machine:
+1. Copy =private.org.example= to =private.org= and fill in the real values.
+2. Open =private.org= and run =M-x org-babel-tangle= to generate =private.el=.
+3. Restart Emacs (or =M-x eval-buffer= the generated file).
+
+=private.org= and =private.el= should be added to =.gitignore= so that
+credentials are never committed.
+
+#+begin_src emacs-lisp
+(load (expand-file-name "private.el" user-emacs-directory) t t)
+#+end_src
+
+* UI & Appearance
+** Startup Behavior
+
+Suppress the splash screen, startup messages, and the toolbar.
+
+#+begin_src emacs-lisp
+(setq inhibit-splash-screen   t
+      inhibit-startup-message t
+      inhibit-startup-screen  t)
+(tool-bar-mode -1)
+#+end_src
+
+** Theme
+
+Use Solarized Dark.  The package is installed as part of Core Packages above.
+
+#+begin_src emacs-lisp
+(load-theme 'solarized-dark t)
+#+end_src
+
+** Text Scale
+
+Quick keybindings to increase or decrease font size in the current buffer.
+
+#+begin_src emacs-lisp
+(global-set-key "\C-c+" 'text-scale-increase)
+(global-set-key "\C-c-" 'text-scale-decrease)
+#+end_src
+
+* File Handling & Editing
+** Basic Settings
+
+#+begin_src emacs-lisp
+(require 'uniquify)
+(require 'saveplace)
+
+;; These are buffer-local; use setq-default
+(setq-default indent-tabs-mode          nil
+              uniquify-buffer-name-style 'forward
+              save-place                 t)
+
+;; Non-buffer-local settings
+(setq visible-bell     t
+      require-final-newline t
+      apropos-do-all   t
+      uniquify-separator ":"
+      save-place-file  (concat user-emacs-directory "visited"))
+#+end_src
+
+** Smartparens
+
+Automatically insert and balance parentheses, brackets, and quotes.
+
+#+begin_src emacs-lisp
+(smartparens-global-mode t)
+#+end_src
+
+* Version Control
+** Magit
+
+Full-featured Git UI.  =C-c g s= opens the status buffer; =C-c g b= annotates
+the file with blame information.
+
+#+begin_src emacs-lisp
+(global-set-key (kbd "C-c g s") 'magit-status)
+(global-set-key (kbd "C-c g b") 'magit-blame)
+(global-set-key (kbd "C-x g b") 'magit-blame-popup)
+#+end_src
+
+** Git Timemachine
+
+Step through the git history of the current file.  =C-c g t= opens a copy in
+a separate window so the working version stays visible.
+
+#+begin_src emacs-lisp
+(defun git-timemachine-other-window ()
+  "Open an indirect buffer of the current file and run git-timemachine on it."
+  (interactive)
+  (let ((buf-name   (generate-new-buffer-name "*Timemachine Mode*"))
+        (file-name  (buffer-file-name)))
+    (pop-to-buffer (make-indirect-buffer (current-buffer) buf-name))
+    (setq buffer-file-name file-name)
+    (goto-char (point-min))
+    (git-timemachine)
+    (local-set-key (kbd "q") 'kill-this-buffer)))
+
+(global-set-key (kbd "C-c g t") 'git-timemachine)
+(global-set-key (kbd "C-x g t") 'git-timemachine-other-window)
+#+end_src
+
+** Git Clone Helper
+
+#+begin_src emacs-lisp
+(defun se:git-clone (repository &optional target)
+  "Clone REPOSITORY, optionally into TARGET directory."
+  (interactive "sGit URL: \nsTarget Dir: ")
+  (shell-command (concat "git clone --recursive " repository " " (or target ""))))
+#+end_src
+
+** Expand Region
+
+=C-=​= progressively expands the selection from the symbol at point outward to
+enclosing expressions and eventually the whole buffer.
+
+#+begin_src emacs-lisp
+(global-set-key (kbd "C-=") 'er/expand-region)
+#+end_src
+
+* Debug Tools
+** pcap mode
+
+Since I spend time in pcaps, it's useful to have this.
+
+#+begin_src emacs-lisp
+  (simple-emacs-package-install 'pcap-mode)
+#+end_src
+
+This will give a handy mode when opening pcaps.
+
+* Development Tools
+** Annotation Highlighting
+
+Highlight =TODO=, =FIXME=, =HACK=, =OPTIMIZE=, and =REFACTOR= tags in source
+code with the warning face so they never go unnoticed.
+
+#+begin_src emacs-lisp
+(defun add-commented-annotations ()
+  "Add font-lock highlighting for common annotation keywords."
+  (font-lock-add-keywords
+   nil '(("\\<@?\\(\\(FIX\\(ME\\)?\\|TODO\\|OPTIMIZE\\|HACK\\|REFACTOR\\)\\(:\\|(\\)\\)"
+          1 font-lock-warning-face t))))
+#+end_src
+
+** YASnippet
+
+Template expansion system.  Custom snippets live in =~/.emacs.d/snippets/=.
+
+#+begin_src emacs-lisp
+(simple-emacs-package-install 'yasnippet)
+(add-to-list 'yas-snippet-dirs (concat user-emacs-directory "snippets"))
+(when simple-emacs-autoload-all-dev
+  (yas-global-mode 1))
+#+end_src
+
+** Auto-complete
+
+YASnippet completions are included in the auto-complete source list.
+
+#+begin_src emacs-lisp
+(setq ac-source (append '(ac-source-yasnippet) ac-sources))
+(when simple-emacs-autoload-all-dev
+  (ac-config-default))
+#+end_src
+
+** IELM (Emacs Lisp REPL)
+
+Enable auto-complete inside the interactive Emacs Lisp evaluator.
+
+#+begin_src emacs-lisp
+(defun simple-emacs-ielm-hook ()
+  "Configure auto-complete sources for ielm mode."
+  (setq ac-sources '(ac-source-functions
+                     ac-source-variables
+                     ac-source-features
+                     ac-source-symbols
+                     ac-source-words-in-same-mode-buffer))
+  (add-to-list 'ac-modes 'inferior-emacs-lisp-mode)
+  (auto-complete-mode 1))
+
+(add-hook 'ielm-mode-hook 'simple-emacs-ielm-hook)
+#+end_src
+
+** Flymake
+
+On-the-fly syntax checking.  Navigate errors with =M-p= / =M-n=.
+The flymake-cursor package shows the error message in the echo area when
+the cursor is on an error line.
+
+#+begin_src emacs-lisp
+(setq flymake-gui-warnings-enabled nil)
+(global-set-key (kbd "M-p") 'flymake-goto-prev-error)
+(global-set-key (kbd "M-n") 'flymake-goto-next-error)
+#+end_src
+
+** Projectile
+
+Project-aware file navigation and search.  =C-c f= is the primary shortcut.
+
+#+begin_src emacs-lisp
+(simple-emacs-package-install 'projectile)
+(when simple-emacs-autoload-all-dev
+  (projectile-global-mode))
+(global-set-key (kbd "C-c f") 'projectile-find-file)
+#+end_src
+
+** iedit
+
+Edit all occurrences of a symbol in the buffer simultaneously.
+
+#+begin_src emacs-lisp
+(simple-emacs-package-install 'iedit)
+#+end_src
+
+** Narrowing / Widening
+
+Smart =C-x n= that does the right thing depending on context:
+- Already narrowed → widens.
+- Active region → narrow to region.
+- In org-mode on a src block → =org-edit-src-code=.
+- In org-mode on a block → narrow to block.
+- In org-mode elsewhere → narrow to subtree.
+- Otherwise → narrow to defun.
+
+Credit: Michael Fogleman, Artur Malabarba, endlessparentheses.com.
+
+#+begin_src emacs-lisp
+(defun narrow-or-widen-dwim (p)
+  "Widen if narrowed; otherwise narrow intelligently.
+With prefix P, always narrow even if already narrowed."
+  (interactive "P")
+  (declare (interactive-only))
+  (cond ((and (buffer-narrowed-p) (not p)) (widen))
+        ((region-active-p)
+         (narrow-to-region (region-beginning) (region-end)))
+        ((derived-mode-p 'org-mode)
+         (cond ((ignore-errors (org-edit-src-code))
+                (delete-other-windows))
+               ((org-at-block-p)
+                (org-narrow-to-block))
+               (t (org-narrow-to-subtree))))
+        (t (narrow-to-defun))))
+
+(define-key ctl-x-map "n" #'narrow-or-widen-dwim)
+(eval-after-load 'org-src
+  '(define-key org-src-mode-map "\C-x\C-s" #'org-edit-src-exit))
+#+end_src
+
+** w3m Code Search
+
+=M-/= searches Google for the symbol at point (or active region), scoped to
+files of the same type as the current buffer.
+
+The search engine list uses short keys for use with =C-u S <key> RET= inside
+w3m as well.
+
+| Key | Search target                         |
+|-----+---------------------------------------|
+| =g= | Google                                |
+| =q= | Stack Overflow                        |
+| =s= | Filetype-scoped (default: .el)        |
+| =w= | Wikipedia                             |
+| =d= | dictionary.reference.com             |
+| =j= | MDN (JavaScript / Mozilla)           |
+
+#+begin_src emacs-lisp
+(simple-emacs-package-install 'w3m)
+
+(defun w3m-get-url-from-search-engine-alist (k l)
+  (when (listp l)
+    (if (string= k (caar l))
+        (nth 1 (car l))
+      (w3m-get-url-from-search-engine-alist k (cdr l)))))
+
+(defun w3m-set-url-from-search-engine-alist (k l url)
+  (when (listp l)
+    (if (string= k (caar l))
+        (setcdr (car l) (list url))
+      (w3m-set-url-from-search-engine-alist k (cdr l) url))))
+
+(setq w3m-search-engine-alist
+      '(("g" "http://www.google.com.au/search?q=%s" utf-8)
+        ("q" "http://www.google.com.au/search?q=%s+site:stackoverflow.com" utf-8)
+        ("s" "http://www.google.com.au/search?q=%s+filetype:el" utf-8)
+        ("w" "http://en.wikipedia.org/wiki/Special:Search?search=%s" utf-8)
+        ("d" "http://dictionary.reference.com/search?q=%s" utf-8)
+        ("j" "http://www.google.com.au/search?q=%s+site:developer.mozilla.org" utf-8)))
+
+(defun w3m-google-by-filetype ()
+  "Search Google for the symbol at point scoped to the current file extension."
+  (interactive)
+  (unless (featurep 'w3m) (require 'w3m))
+  (let* ((thing (if (region-active-p)
+                    (buffer-substring-no-properties (region-beginning) (region-end))
+                  (thing-at-point 'symbol)))
+         (old-url (w3m-get-url-from-search-engine-alist "s" w3m-search-engine-alist)))
+    (when buffer-file-name
+      (w3m-set-url-from-search-engine-alist
+       "s" w3m-search-engine-alist
+       (replace-regexp-in-string "filetype:.*"
+                                 (concat "filetype:" (file-name-extension buffer-file-name))
+                                 old-url)))
+    (w3m-search "s" thing)
+    (w3m-set-url-from-search-engine-alist "s" w3m-search-engine-alist old-url)))
+
+(global-set-key (kbd "M-/") 'w3m-google-by-filetype)
+#+end_src
+
+** Markdown
+
+#+begin_src emacs-lisp
+(autoload 'markdown-mode "markdown-mode" "Major mode for editing Markdown files" t)
+(add-to-list 'auto-mode-alist '("\\.text\\'"     . markdown-mode))
+(add-to-list 'auto-mode-alist '("\\.markdown\\'" . markdown-mode))
+(add-to-list 'auto-mode-alist '("\\.md\\'"       . markdown-mode))
+#+end_src
+
+** Gnuplot
+
+#+begin_src emacs-lisp
+(autoload 'gnuplot-mode       "gnuplot" "gnuplot major mode" t)
+(autoload 'gnuplot-make-buffer "gnuplot" "open a buffer in gnuplot mode" t)
+(add-to-list 'auto-mode-alist '("\\.gp$" . gnuplot-mode))
+#+end_src
+
+** ASN.1
+
+#+begin_src emacs-lisp
+(simple-emacs-package-install 'asn1-mode)
+(add-to-list 'auto-mode-alist '("\\.asn1$" . asn1-mode))
+(add-to-list 'auto-mode-alist '("\\.gdmo$" . asn1-mode))
+#+end_src
+
+** impatient-mode
+
+Serve the current buffer over HTTP with live reloading — handy for previewing
+HTML edits in a browser.
+
+#+begin_src emacs-lisp
+(simple-emacs-package-install 'impatient-mode)
+#+end_src
+
+* Language-Specific Development
+** C / C++
+*** GNU Global / GTags
+
+Tags are created at the top-level =.git= directory and updated automatically
+on every save.  Navigation keys inside C/C++ buffers:
+
+| Key   | Action                         |
+|-------+--------------------------------|
+| =M-.= | Jump to tag definition         |
+| =M-,= | Find tag from cursor position  |
+| =M-*= | Grep-style pattern search      |
+
+#+begin_src emacs-lisp
+(defcustom simple-emacs-plugins-gnu-gtags-binary "/usr/bin/gtags"
+  "Path to the GNU global `gtags' binary (tag creator)."
+  :type 'string :group 'simple-emacs-plugins)
+
+(defcustom simple-emacs-plugins-gnu-global-binary "/usr/bin/global"
+  "Path to the GNU `global' binary (tag reader/updater)."
+  :type 'string :group 'simple-emacs-plugins)
+
+(defcustom simple-emacs-plugins-auto-run-gtags t
+  "Non-nil auto-updates the tags database on every C/C++ file save."
+  :type 'boolean :group 'simple-emacs-plugins)
+
+(defcustom simple-emacs-cxx-tabs-as-spaces t
+  "Non-nil uses spaces for indentation in C/C++ mode (overridden for linux-style dirs)."
+  :type 'boolean :group 'simple-emacs-plugins)
+#+end_src
+
+#+begin_src emacs-lisp
+(defun global-tags-root-dir ()
+  "Return the GTAGS root directory string, or nil if no database exists."
+  (with-temp-buffer
+    (when (zerop (call-process simple-emacs-plugins-gnu-global-binary nil t nil "-pr"))
+      (buffer-substring (point-min) (1- (point-max))))))
+
+(defun global-run-update ()
+  "Run `global -u' to update an existing tags database."
+  (call-process simple-emacs-plugins-gnu-global-binary nil nil nil "-u"))
+
+(defun global-do-initialize ()
+  "Run `gtags' at the top-level .git directory to create a new database."
+  (let* ((root (or (upward-find-file ".git") "."))
+         (cmd  (concat "cd " root " && " simple-emacs-plugins-gnu-gtags-binary)))
+    (shell-command cmd)))
+
+(defun global-run-tags-automatic ()
+  "Hook function: update or create the tags database after saving a C/C++ file."
+  (when (and simple-emacs-plugins-auto-run-gtags
+             (member major-mode '(c++-mode c-mode)))
+    (if (global-tags-root-dir)
+        (global-run-update)
+      (global-do-initialize))))
+
+(add-hook 'after-save-hook 'global-run-tags-automatic)
+#+end_src
+
+*** C Mode Hook
+
+Applies the correct coding style for each project:
+- Directories in =simple-emacs-linux-cstyle-list= (set in =private.el=) use
+  Linux kernel style: 8-space hard tabs, =linux= c-default-style.
+- All other directories use 4-space soft tabs.
+
+#+begin_src emacs-lisp
+(defun remove-last-dir (dir)
+  "Strip the last path component from DIR."
+  (let* ((splits (cdr (split-string dir "/")))
+         (res    (mapconcat 'identity (butlast splits) "/")))
+    (concat "/" res)))
+
+(defun simple-emacs-c-mode-hook ()
+  (c-set-offset 'substatement-open 0)
+  (c-set-offset 'arglist-intro '+)
+  (when simple-emacs-cxx-tabs-as-spaces
+    (setq indent-tabs-mode nil))
+  ;; Linux kernel style for designated project directories
+  (if (and (upward-find-file ".git")
+           (member (remove-last-dir (upward-find-file ".git"))
+                   simple-emacs-linux-cstyle-list))
+      (setq tab-stop-list    '(8 16 24 32 40 48 56 64)
+            c-indent-level   8
+            c-basic-offset   8
+            tab-width        8
+            indent-tabs-mode t
+            c-default-style  "linux")
+    (setq c++-tab-always-indent t
+          c-basic-offset        4
+          c-indent-level        4
+          tab-stop-list         '(4 8 12 16 20 24 28 32 36 40 44 48 52 56 60)
+          tab-width             4
+          indent-tabs-mode      nil))
+  (flymake-mode 1)
+  (add-commented-annotations)
+  (define-key c-mode-base-map (kbd "C-c C-l")
+    (lambda () (interactive) (call-interactively 'compile-next-makefile)))
+  (define-key c-mode-base-map (kbd "RET") 'newline-and-indent)
+  (define-key c-mode-base-map (kbd "M-.") 'gtags-find-tag)
+  (define-key c-mode-base-map (kbd "M-,") 'gtags-find-tag-from-here)
+  (define-key c-mode-base-map (kbd "M-*") 'gtags-find-pattern))
+
+(add-hook 'c-mode-common-hook 'simple-emacs-c-mode-hook)
+#+end_src
+
+*** Compile with Nearest Makefile
+
+Walks upward from the current buffer to find a =Makefile= and compiles there.
+
+#+begin_src emacs-lisp
+(defun compile-next-makefile (flags)
+  "Compile from the nearest parent directory containing a Makefile.
+Prompts for optional additional FLAGS."
+  (interactive (list (read-string "Additional make flags: ")))
+  (let* ((default-directory (or (upward-find-file "Makefile") "."))
+         (compile-command (concat "cd " default-directory " && "
+                                  compile-command flags)))
+    (compile compile-command)))
+#+end_src
+
+*** GDB
+
+#+begin_src emacs-lisp
+(setq gdb-many-windows t
+      gdb-show-main    t
+      gtags-auto-update t)
+#+end_src
+
+*** GTags Select Mode
+
+#+begin_src emacs-lisp
+(defun simple-emacs-gtags-select ()
+  (define-key gtags-select-mode-map (kbd "RET") 'gtags-select-tag)
+  (define-key gtags-select-mode-map (kbd "q")
+    (lambda () (interactive) (kill-buffer))))
+
+(add-hook 'gtags-select-mode-hook 'simple-emacs-gtags-select)
+#+end_src
+
+*** auto-complete-clang
+
+Clang-based completion for C/C++ mode.
+
+#+begin_src emacs-lisp
+(when simple-emacs-cxx-development
+  (simple-emacs-package-install 'auto-complete-clang))
+#+end_src
+
+** Python
+
+Requires the following Python packages:
+#+begin_example
+pip install jedi
+pip install --upgrade pyflakes
+#+end_example
+
+#+begin_src emacs-lisp
+  (when simple-emacs-python-development
+    (simple-emacs-package-install 'jedi)
+    (simple-emacs-package-install 'flymake-python-pyflakes)
+    (simple-emacs-package-install 'pyvenv)
+    (simple-emacs-package-install 'python-environment)
+    (simple-emacs-package-install 'elpy)
+
+    (defun simple-python-hook ()
+      (add-commented-annotations)
+      (auto-complete-mode)
+      (jedi:ac-setup)
+      (elpy-enable)
+      (elpy-mode)
+      (local-set-key (kbd "M-.") 'elpy-goto-definition)
+      (flymake-python-pyflakes-load))
+
+    (add-hook 'python-mode-hook 'simple-python-hook))
+#+end_src
+
+** Web (JS / HTML / CSS)
+
+Packages installed: =js2-mode=, =web-mode=, =js2-refactor=, =ac-js2=,
+=nodejs-repl=, =flymake-jshint=, =web-server=, =restclient=.
+
+JavaScript refactoring commands use the =C-c C-m= prefix (from =js2-refactor=).
+
+#+begin_src emacs-lisp
+(when simple-emacs-web-development
+  (simple-emacs-package-install 'js2-mode)
+  (simple-emacs-package-install 'web-mode)
+  (simple-emacs-package-install 'js2-refactor)
+  (simple-emacs-package-install 'ac-js2)
+  (simple-emacs-package-install 'nodejs-repl)
+  (simple-emacs-package-install 'flymake-jshint)
+  (simple-emacs-package-install 'web-server)
+  (simple-emacs-package-install 'restclient)
+
+  ;; web-mode handles HTML and server-side template formats
+  (dolist (spec '(("\\.phtml\\'"    . web-mode)
+                  ("\\.tpl\\.php\\'" . web-mode)
+                  ("\\.[agj]sp\\'"  . web-mode)
+                  ("\\.as[cp]x\\'"  . web-mode)
+                  ("\\.erb\\'"      . web-mode)
+                  ("\\.mustache\\'" . web-mode)
+                  ("\\.html?\\'"    . web-mode)))
+    (add-to-list 'auto-mode-alist spec))
+
+  ;; JavaScript refactoring prefix: C-c C-m <chord>
+  (js2r-add-keybindings-with-prefix "C-c C-m")
+  (setq js2-highlight-level 3)
+
+  (add-hook 'js-mode-hook  'js2-minor-mode)
+  (add-hook 'js2-mode-hook 'ac-js2-mode)
+  (add-hook 'js-mode-hook  (lambda () (flymake-mode t)))
+
+  (add-hook 'js2-mode-hook
+            (lambda ()
+              (add-commented-annotations)
+              (local-set-key (kbd "C-x C-e") 'js-send-last-sexp)
+              (local-set-key (kbd "C-x C-r") 'js-send-region)
+              (local-set-key (kbd "C-M-x")   'js-send-last-sexp-and-go)
+              (local-set-key (kbd "C-c b")   'js-send-buffer)))
+
+  (add-hook 'web-mode-hook
+            (lambda () (add-commented-annotations) (impatient-mode)))
+  (add-hook 'js-mode-hook (lambda () (add-commented-annotations)))
+  (add-to-list 'ac-modes 'web-mode))
+#+end_src
+
+** Ruby
+
+RSpec keybindings inside =enh-ruby-mode= buffers:
+
+| Key       | Action                          |
+|-----------+---------------------------------|
+| =C-c C-l= | Run RSpec on the current file   |
+| =C-c l=   | Run RSpec on the current line   |
+| =M-n=     | Jump to next Ruby error         |
+
+#+begin_src emacs-lisp
+(when simple-emacs-ruby-development
+  (defcustom simple-emacs-ruby-binary "/usr/bin/ruby"
+    "Path to the Ruby 1.9.2+ interpreter used by enh-ruby-mode."
+    :type 'string :group 'simple-emacs-plugins)
+
+  (simple-emacs-package-install-no-require 'enh-ruby-mode)
+  (autoload 'enh-ruby-mode "enh-ruby-mode" "Major mode for ruby files" t)
+
+  (dolist (spec '(("\\.rb$"      . enh-ruby-mode)
+                  ("\\.rake$"    . enh-ruby-mode)
+                  ("Rakefile$"   . enh-ruby-mode)
+                  ("Gemfile$"    . enh-ruby-mode)
+                  ("\\.gemspec$" . enh-ruby-mode)
+                  ("\\.ru$"      . enh-ruby-mode)))
+    (add-to-list 'auto-mode-alist spec))
+  (add-to-list 'interpreter-mode-alist '("ruby" . enh-ruby-mode))
+
+  (setq enh-ruby-bounce-deep-indent        t
+        enh-ruby-hanging-brace-indent-level 2)
+
+  (defun rspec-compile-file ()
+    "Run RSpec for the entire current file."
+    (interactive)
+    (compile (format "cd %s;bundle exec rspec %s"
+                     (upward-find-file "Gemfile")
+                     (file-relative-name (buffer-file-name)
+                                         (upward-find-file "Gemfile")))
+             t))
+
+  (defun rspec-compile-line ()
+    "Run RSpec for the test at the current line."
+    (interactive)
+    (compile (format "cd %s;bundle exec rspec %s -l %s"
+                     (upward-find-file "Gemfile")
+                     (file-relative-name (buffer-file-name)
+                                         (upward-find-file "Gemfile"))
+                     (line-number-at-pos))
+             t))
+
+  (add-hook 'enh-ruby-mode-hook
+            (lambda ()
+              (add-commented-annotations)
+              (setq enh-ruby-program simple-emacs-ruby-binary)
+              (local-set-key (kbd "C-c C-l") 'rspec-compile-file)
+              (local-set-key (kbd "M-n")     'enh-ruby-find-error)
+              (local-set-key (kbd "C-c l")   'rspec-compile-line)))
+  (add-to-list 'ac-modes 'enh-ruby-mode))
+#+end_src
+
+* Org-mode
+** Babel Languages
+
+Enable code execution in org source blocks for these languages.
+=org-confirm-babel-evaluate= is =t= so Emacs asks before running untrusted code.
+
+#+begin_src emacs-lisp
+(setq org-confirm-babel-evaluate t)
+
+(org-babel-do-load-languages
+ 'org-babel-load-languages
+ '((shell      . t)
+   (python     . t)
+   (ruby       . t)
+   (gnuplot    . t)
+   (emacs-lisp . t)
+   (C          . t)
+   (dot        . t)))
+#+end_src
+
+** LaTeX / Beamer Export
+
+Use the =minted= package for syntax-highlighted code listings in PDF output.
+
+Requirements:
+- =pdflatex= with =-shell-escape= support
+- The =minted= LaTeX package (installed via TeX distribution)
+- Python =pygments= (=pip install pygments=)
+
+#+begin_src emacs-lisp
+(require 'ox-beamer)
+(require 'ox-latex)
+
+(setq org-export-allow-bind-keywords t
+      org-latex-listings             'minted
+      org-src-fontify-natively       t)
+
+(add-to-list 'org-latex-packages-alist '("" "minted"))
+
+(setq org-latex-pdf-process
+      '("pdflatex -shell-escape -interaction nonstopmode -output-directory %o %f"
+        "pdflatex -shell-escape -interaction nonstopmode -output-directory %o %f"
+        "pdflatex -shell-escape -interaction nonstopmode -output-directory %o %f"))
+#+end_src
+
+** Agenda & Task Logging
+
+=C-c a= opens the agenda.  Completing a task prompts for a completion note
+(=org-log-done 'note=).  Agenda files and contacts files are set in =private.el=.
+
+#+begin_src emacs-lisp
+(global-set-key "\C-ca" 'org-agenda)
+(setq org-log-done 'note)
+;; org-agenda-files and org-contacts-files → set in private.el
+#+end_src
+
+** Org-contacts
+
+#+begin_src emacs-lisp
+(require 'org-contacts)
+#+end_src
+
+* Email (Gnus)
+** Visible Headers
+
+Show only the headers that matter for reading and replying.
+
+#+begin_src emacs-lisp
+(setq gnus-visible-headers
+      "^From:\\|^Subject:\\|^To:\\|^Cc:\\|^In-Reply-To:\\|^Message-ID:\\|^Date:")
+#+end_src
+
+** NNIR Search
+
+#+begin_src emacs-lisp
+(require 'nnir)
+#+end_src
+
+** Appointment Display
+
+#+begin_src emacs-lisp
+(setq appt-display-mode-line t)
+#+end_src
+
+** Adaptive Scoring
+
+Automatically boost or penalize articles based on reading behavior.
+Scores are accumulated in =gnus.SCORE=.
+
+#+begin_src emacs-lisp
+(setq gnus-default-adaptive-score-alist
+      '((gnus-unread-mark)
+        (gnus-ticked-mark    (from  4))
+        (gnus-dormant-mark   (from  5))
+        (gnus-del-mark       (from -4) (subject -1))
+        (gnus-read-mark      (from  4) (subject  2))
+        (gnus-expirable-mark (from -1) (subject -1))
+        (gnus-killed-mark    (from -1) (subject -3))
+        (gnus-kill-file-mark)
+        (gnus-ancient-mark)
+        (gnus-low-score-mark)
+        (gnus-catchup-mark   (from -1) (subject -1)))
+      gnus-use-adaptive-scoring      '(word line)
+      gnus-adaptive-word-length-limit 5
+      gnus-adaptive-word-no-group-words t
+      gnus-home-score-file            "gnus.SCORE")
+#+end_src
+
+** Gnus Agent
+
+#+begin_src emacs-lisp
+(setq gnus-agent-consider-all-articles t
+      gnus-agent-enable-expiration     'DISABLE
+      gnus-ignored-newsgroups          "^to\\.\\|^[0-9. ]+\\( \\|$\\)\\|^[\"]\"[#'()]")
+#+end_src
+
+** X-Label Support
+
+Support for =X-Label= headers: display, filtering, and a custom summary format
+that shows label values.
+
+#+begin_src emacs-lisp
+(setq nnmail-extra-headers '(To X-Label Newsgroups Content-Type))
+
+(defun rs-gnus-get-label (header)
+  "Return the value of the X-Label header, or an empty string."
+  (or (cdr (assq 'X-Label (mail-header-extra header))) ""))
+
+(defalias 'gnus-user-format-function-r 'rs-gnus-get-label)
+
+(copy-face 'default 'face-label)
+(set-face-foreground 'face-label "red")
+(setq gnus-face-6 'face-label
+      gnus-face-5 'face-label)
+
+(defun rs-gnus-summary-limit-to-label (regexp &optional not-matching)
+  "Limit the summary buffer to articles whose X-Label matches REGEXP."
+  (interactive
+   (list (read-string
+          (format "%s label (regexp): "
+                  (if current-prefix-arg "Exclude" "Limit to")))
+         current-prefix-arg))
+  (gnus-summary-limit-to-extra 'X-Label regexp not-matching))
+#+end_src
+
+** Thread Display
+
+Use Unicode box-drawing characters for the thread tree when in a graphical
+frame.
+
+#+begin_src emacs-lisp
+(when window-system
+  (setq gnus-sum-thread-tree-root          "● "
+        gnus-sum-thread-tree-false-root    "▷ "
+        gnus-sum-thread-tree-single-indent ""
+        gnus-sum-thread-tree-leaf-with-other "├─►"
+        gnus-sum-thread-tree-vertical      "│ "
+        gnus-sum-thread-tree-single-leaf   "└─►"))
+
+(setq gnus-group-line-format   "%P%M%S %(%g%) (%y)\n")
+(setq gnus-summary-line-format
+      "%1{%U%R%z: %}%2{%d%}%5{ %[%4i%] %}%4{%-24,24n%}%6{%-4,4ur%}%5{| %}%(%1{%B%}%s%)\n")
+#+end_src
+
+** Keybindings
+
+#+begin_src emacs-lisp
+(define-key gnus-summary-mode-map (kbd "d") 'gnus-summary-delete-article)
+(define-key gnus-article-mode-map (kbd "S S") 'gnus-article-hide-citation)
+(add-hook 'gnus-select-article-hook 'gnus-agent-fetch-selected-article)
+#+end_src
+
+** Multi-Account SMTP
+
+When =simple-emacs-multiple-smtp= is non-nil, an advice on
+=smtpmail-via-smtp= inspects the =From:= header and switches the SMTP server
+and port to match the sending account.  The account table is defined in
+=private.el= as =smtp-accounts=, a list of =(address full-name server port)=
+tuples.
+
+#+begin_src emacs-lisp
+(require 'cl)
+(setq smtpmail-stream-type 'starttls)
+
+(defun simple-emacs-multi-mail ()
+  "Select SMTP settings based on the From: header before sending."
+  (when simple-emacs-multiple-smtp
+    (save-excursion
+      (cl-loop with from = (save-restriction
+                              (message-narrow-to-headers)
+                              (message-fetch-field "from"))
+               for (addr fname server port) in smtp-accounts
+               when (or (string-match addr from)
+                        (string-match (format "%s <%s>" fname addr) from))
+               do (setq user-mail-address      addr
+                        user-full-name         fname
+                        smtpmail-smtp-server   server
+                        smtpmail-smtp-service  port)))))
+
+(defadvice smtpmail-via-smtp
+    (before change-smtp-by-message-from-field (recipient buffer &optional ask) activate)
+  (with-current-buffer buffer (simple-emacs-multi-mail)))
+#+end_src
+
+** Patch Handling
+
+=gnus-article-treat-patch= highlights patch emails with diff-style syntax
+coloring.  The helper commands below let you act on a patch without leaving
+Gnus:
+
+| Command                                   | Action                                  |
+|-------------------------------------------+-----------------------------------------|
+| =simple-emacs-gnus-reader-apply-git-patch= | Apply via =git am= and rebuild          |
+| =simple-emacs-gnus-check-patch=            | Run =rhcheckpatch.py= on the patch      |
+| =simple-emacs-gnus-write-patch=            | Save the patch to a temp file           |
+
+#+begin_src emacs-lisp
+(require 'gnus-article-treat-patch)
+(setq ft/gnus-article-patch-conditions
+      '("^@@ -[0-9]+,[0-9]+ \\+[0-9]+,[0-9]+ @@"))
+
+(defun simple-emacs-gnus-reader-apply-git-patch ()
+  "Apply the current Gnus article as a git patch and run a rebuild command."
+  (interactive)
+  (let ((temp-patch-file  (make-temp-file "patch"))
+        (default-directory (read-string "Target Git Directory: " "~/git/"))
+        (build-command     (read-string "Rebuild Command: " "make clean && make")))
+    (save-window-excursion
+      (gnus-summary-select-article-buffer)
+      (write-region (point-min) (point-max) temp-patch-file t))
+    (call-process "git" nil "*GNUS Git Patch*" t "am" temp-patch-file)
+    (delete-file temp-patch-file)
+    (start-process "git-patch" "*GNUS Git Patch*" "/bin/sh" "-c" build-command)
+    (switch-to-buffer "*GNUS Git Patch*")))
+
+(defun simple-emacs-gnus-check-patch ()
+  "Run rhcheckpatch.py on the current Gnus article."
+  (interactive)
+  (let ((temp-patch-file  (make-temp-file "patch"))
+        (default-directory (read-string "Target Git Directory: " "~/git/")))
+    (save-window-excursion
+      (gnus-summary-select-article-buffer)
+      (write-region (point-min) (point-max) temp-patch-file t))
+    (start-process "git-patch" "*GNUS Git Patch*"
+                   "/usr/bin/rhcheckpatch.py" "-v" "-p" "-g"
+                   default-directory "-a" temp-patch-file)
+    (switch-to-buffer "*GNUS Git Patch*")))
+
+(defun simple-emacs-gnus-write-patch ()
+  "Save the current Gnus article to a temp file and report its path."
+  (interactive)
+  (let ((temp-patch-file (make-temp-file "patch")))
+    (save-window-excursion
+      (gnus-summary-select-article-buffer)
+      (write-region (point-min) (point-max) temp-patch-file t))
+    (message "Patch written to: %s" temp-patch-file)))
+#+end_src
+
+** Message Composition
+
+Auto-fill at column 72 and enable flyspell when composing email.
+
+#+begin_src emacs-lisp
+(defun simple-emacs-message-mode ()
+  "Set up message composition: auto-fill at 72 columns and flyspell."
+  (setq fill-column 72)
+  (turn-on-auto-fill)
+  (flyspell-mode 1))
+
+(add-hook 'message-mode-hook 'simple-emacs-message-mode)
+
+(defun normal-message-insert-citation-line ()
+  "Insert a plain citation line: \"On <date>, <from> wrote:\"."
+  (when message-reply-headers
+    (insert "On " (mail-header-date message-reply-headers)
+            ", " (mail-header-from message-reply-headers) " wrote:")
+    (newline)
+    (newline)))
+#+end_src
+
+** GPG / PGP Signing
+
+The GPG key ID is set in =private.el= via =epg-user-id= and
+=mml-secure-openpgp-signers=.
+
+* Chat
+** IRC (rcirc)
+
+Server list, channel lists, and nickserv credentials are set in =private.el=.
+=rcirc-notify= provides desktop notifications for highlights and PMs.
+
+#+begin_src emacs-lisp
+(setq rcirc-log-flag t)
+(eval-after-load 'rcirc '(require 'rcirc-notify))
+(eval-after-load 'rcirc '(rcirc-notify-add-hooks))
+
+;; Reconnect command (from the rcirc manual)
+(eval-after-load 'rcirc
+  '(defun-rcirc-command reconnect (arg)
+     "Reconnect the server process."
+     (interactive "i")
+     (unless process
+       (error "There's no process for this target"))
+     (let* ((server (car (process-contact process)))
+            (port   (process-contact process :service))
+            (nick   (rcirc-nick process))
+            channels query-buffers)
+       (dolist (buf (buffer-list))
+         (with-current-buffer buf
+           (when (eq process (rcirc-buffer-process))
+             (remove-hook 'change-major-mode-hook
+                          'rcirc-change-major-mode-hook)
+             (if (rcirc-channel-p rcirc-target)
+                 (setq channels     (cons rcirc-target channels))
+               (setq query-buffers (cons buf query-buffers))))))
+       (delete-process process)
+       (rcirc-connect server port nick
+                      rcirc-default-user-name
+                      rcirc-default-full-name
+                      channels))))
+
+(add-hook 'rcirc-mode-hook (lambda () (flyspell-mode 1)))
+#+end_src
+
+** Jabber
+
+Account list is set in =private.el=.  =goto-address= turns URLs in chat
+messages into clickable links.
+
+#+begin_src emacs-lisp
+(when simple-emacs-social-mode
+  (simple-emacs-package-install 'jabber)
+  (load "jabber-autoloads")
+  (add-hook 'jabber-chat-mode-hook 'goto-address))
+#+end_src
+
+** Slack
+
+Slack is a weird one - I don't particularly like it, but it seems
+like the way everything has gone.  Let's at least enable it.
+
+Workspace credentials and channel subscriptions live in =private.el=, populated
+from the =* Slack= section of =private.org=.  The variable
+=simple-emacs-slack-teams= (declared in [[*Feature Flags][Feature Flags]]) holds a list of
+keyword-argument plists, each passed directly to =slack-register-team=:
+
+#+begin_example
+(:name "my-workspace"
+ :token "xoxp-..."
+ :cookie "xoxc-..."
+ :subscribed-channels '(general random engineering))
+#+end_example
+
+Desktop notifications are handled by the =alert= package.  On Linux with
+=libnotify= available, alerts appear as native desktop notifications.
+
+Keybindings under the =C-c s= prefix:
+
+| Key       | Command                            |
+|-----------+------------------------------------|
+| =C-c s s= | =slack-start= — connect workspaces |
+| =C-c s r= | =slack-select-rooms= — pick channel |
+| =C-c s d= | =slack-im-select= — open a DM      |
+| =C-c s u= | =slack-select-unread-rooms=         |
+| =C-c s @= | =slack-message-embed-mention=       |
+
+#+begin_src emacs-lisp
+(when simple-emacs-social-mode
+  (simple-emacs-package-install 'slack)
+  (simple-emacs-package-install 'alert)
+
+  ;; Desktop notifications via libnotify (Linux); change to 'osx-notifier on macOS
+  (setq alert-default-style 'libnotify)
+
+  ;; Suppress the Slack connecting/connected messages in the echo area
+  (setq slack-buffer-emojify t
+        slack-prefer-current-team t)
+
+  ;; Keybindings
+  (global-set-key (kbd "C-c s s") 'slack-start)
+  (global-set-key (kbd "C-c s r") 'slack-select-rooms)
+  (global-set-key (kbd "C-c s d") 'slack-im-select)
+  (global-set-key (kbd "C-c s u") 'slack-select-unread-rooms)
+  (global-set-key (kbd "C-c s @") 'slack-message-embed-mention)
+
+  ;; Register each workspace defined in private.el
+  (dolist (team simple-emacs-slack-teams)
+    (apply #'slack-register-team team)))
+#+end_src
+
+* Remote Files (Tramp)
+
+Adjust the shell prompt pattern so that Tramp correctly detects the remote
+shell prompt across a variety of configurations.  This is at least good for
+most of the PS1 setups I have seen/used.  Keep verbosity low.
+
+#+begin_src emacs-lisp
+(setq tramp-shell-prompt-pattern
+      "^[^$>\n]*[#$%>] *\\(\[[0-9;]*[a-zA-Z] *\\)*"
+      tramp-verbose 1)
+#+end_src
