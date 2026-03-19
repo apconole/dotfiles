@@ -140,6 +140,25 @@ Each entry in =simple-emacs-slack-teams= is a plist passed to
         ))
 #+end_src
 
+* Patch Trees
+
+Map =[PATCH <prefix>]= subject tags to local git tree paths and branches.
+Each entry is =(\"prefix\" :path \"/path/to/tree\" :branch \"branchname\")=.
+
+The prefix is the first token after =PATCH= that is not a version (=v2=)
+or fraction (=1/3=).  Examples:
+- =[PATCH net]= → prefix =net=
+- =[PATCH net-next v3 2/5]= → prefix =net-next=
+- =[PATCH]= → no prefix; falls back to prompting
+
+#+begin_src emacs-lisp
+(setq simple-emacs-patch-trees
+      '(
+        ;; ("net"      :path "@HOME@/git/net"      :branch "main")
+        ;; ("net-next" :path "@HOME@/git/net-next" :branch "main")
+        ))
+#+end_src
+
 * Org-mode Files
 
 #+begin_src emacs-lisp

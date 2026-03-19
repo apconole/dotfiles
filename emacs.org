@@ -903,6 +903,41 @@ Requirements:
 #+end_src
 
 * Email (Gnus)
+** Basic configuration
+These are the basic setup I use for gnus to make it style up in an
+easy to view threaded manner.
+
+The biggest thing is setting up all of the faces
+#+begin_src emacs-lisp
+(defun rs-gnus-get-label (header)
+  "Returns label from X-Label header"
+  (let
+      ((lbl (or (cdr (assq 'X-Label (mail-header-extra header))) "")))
+    lbl))
+
+(defalias 'gnus-user-format-function-r 'rs-gnus-get-label)
+
+(setq nnmail-extra-headers '(To X-Label Newsgroups Content-Type))
+
+(copy-face 'default 'face-label)
+(set-face-foreground 'face-label "red")
+(setq gnus-face-6 'face-label)
+(setq gnus-face-5 'face-label)
+(when window-system
+  (setq
+   gnus-sum-thread-tree-root "● "
+   gnus-sum-thread-tree-false-root "▷ "
+   gnus-sum-thread-tree-single-indent ""
+   gnus-sum-thread-tree-leaf-with-other "├─►"
+   gnus-sum-thread-tree-vertical "│ "
+   gnus-sum-thread-tree-single-leaf "└─►"))
+;; (set-face-foreground 'gnus-group-mail-1-empty "blue")
+(setq gnus-group-line-format "%P%M%S %(%g%) (%y)\n")
+(setq gnus-summary-line-format
+      "%1{%U%R%z: %}%2{%d%}%5{ %[%4i%] %}%4{%-24,24n%}%6{%-4,4ur%}%5{| %}%(%1{%B%}%s%)\n")
+
+#+end_src
+
 ** Visible Headers
 
 Show only the headers that matter for reading and replying.
@@ -1050,11 +1085,22 @@ tuples.
 coloring.  The helper commands below let you act on a patch without leaving
 Gnus:
 
-| Command                                   | Action                                  |
-|-------------------------------------------+-----------------------------------------|
-| =simple-emacs-gnus-reader-apply-git-patch= | Apply via =git am= and rebuild          |
-| =simple-emacs-gnus-check-patch=            | Run =rhcheckpatch.py= on the patch      |
-| =simple-emacs-gnus-write-patch=            | Save the patch to a temp file           |
+| Command                                      | Action                                       |
+|----------------------------------------------+----------------------------------------------|
+| =simple-emacs-gnus-reader-apply-git-patch=   | Apply via =git am= and rebuild               |
+| =simple-emacs-gnus-check-patch=              | Run =rhcheckpatch.py= on the patch           |
+| =simple-emacs-gnus-write-patch=              | Save the patch to a temp file                |
+| =simple-emacs-gnus-view-patch-in-context=    | Open patch in =diff-mode= against tree files |
+
+The tree used by =view-patch-in-context= and =apply-git-patch= is selected
+automatically by matching the =[PATCH <prefix>]= subject tag against
+=simple-emacs-patch-trees= (set in =private.el=).  If no match is found, both
+commands fall back to an interactive directory prompt.
+
+=view-patch-in-context= sets =default-directory= to the tree root before
+opening the patch buffer, so =diff-goto-source= (=C-c C-c= or =o= on any
+hunk) jumps to the real file at that location — showing the full file
+contents rather than just the ±3 lines of diff context.
 
 We first need all of the patch treating state machine and hook installation.
 This will come from velkyel's git repository at:
@@ -1524,11 +1570,70 @@ Now, fill out our customized version of the patches.
   (setq ft/gnus-article-patch-conditions
         '("^@@ -[0-9]+,[0-9]+ \\+[0-9]+,[0-9]+ @@"))
 
+  ;; simple-emacs-patch-trees is populated by private.el.
+  (defvar simple-emacs-patch-trees nil
+    "Alist mapping patch subject prefixes to git tree configs.
+Each entry: (\"prefix\" :path \"/path/to/tree\" :branch \"branchname\").")
+
+  (defun simple-emacs-patch-subject-prefix (subject)
+    "Extract the tree prefix from a patch SUBJECT tag.
+Returns the first token after PATCH that is not a version (v2) or
+fraction (1/3), e.g.:
+  \"[PATCH net v2 1/3] foo\" -> \"net\"
+  \"[PATCH net-next] foo\"   -> \"net-next\"
+  \"[PATCH] foo\"            -> nil"
+    (when (string-match "\\[PATCH\\([^]]*\\)\\]" subject)
+      (let ((parts (split-string (string-trim (match-string 1 subject)))))
+        (cl-find-if (lambda (p)
+                      (not (or (string-match-p "^v[0-9]+" p)
+                               (string-match-p "^[0-9]+/[0-9]+$" p))))
+                    parts))))
+
+  (defun simple-emacs-patch-lookup-tree (subject)
+    "Return the tree config plist for the prefix found in SUBJECT, or nil."
+    (let ((prefix (simple-emacs-patch-subject-prefix subject)))
+      (when prefix
+        (cdr (assoc prefix simple-emacs-patch-trees)))))
+
+  (defun simple-emacs-patch-resolve-directory ()
+    "Return the git tree directory for the current Gnus article.
+Parses the subject for a [PATCH <prefix>] tag, looks it up in
+`simple-emacs-patch-trees', and falls back to an interactive prompt
+if no match is found."
+    (let* ((subject (mail-header-subject
+                     (gnus-summary-article-header)))
+           (tree    (simple-emacs-patch-lookup-tree subject))
+           (path    (when tree (plist-get tree :path))))
+      (if path
+          (file-name-as-directory (expand-file-name path))
+        (read-directory-name "Git tree root: " "~/git/"))))
+
+  (defun simple-emacs-gnus-view-patch-in-context ()
+    "Open the current Gnus patch in diff-mode against its configured git tree.
+The tree is selected by matching the [PATCH <prefix>] subject tag against
+`simple-emacs-patch-trees'.  With the tree root as `default-directory',
+\\[diff-goto-source] on any hunk (C-c C-c or o) jumps to the real file,
+showing full file context rather than just the diff lines."
+    (interactive)
+    (let* ((tree-dir       (simple-emacs-patch-resolve-directory))
+           (temp-patch-file (make-temp-file "gnus-patch-" nil ".patch")))
+      (save-window-excursion
+        (gnus-summary-select-article-buffer)
+        (write-region (point-min) (point-max) temp-patch-file t))
+      (let ((buf (find-file-noselect temp-patch-file)))
+        (with-current-buffer buf
+          (setq default-directory tree-dir)
+          (diff-mode)
+          (setq buffer-read-only t))
+        (switch-to-buffer buf)
+        (message "Tree: %s  —  use C-c C-c or o on a hunk to view in context"
+                 tree-dir))))
+
   (defun simple-emacs-gnus-reader-apply-git-patch ()
     "Apply the current Gnus article as a git patch and run a rebuild command."
     (interactive)
     (let ((temp-patch-file  (make-temp-file "patch"))
-          (default-directory (read-string "Target Git Directory: " "~/git/"))
+          (default-directory (simple-emacs-patch-resolve-directory))
           (build-command     (read-string "Rebuild Command: " "make clean && make")))
       (save-window-excursion
         (gnus-summary-select-article-buffer)

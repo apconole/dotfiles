@@ -76,6 +76,9 @@ else
 ;; To regenerate private.el after editing private.org:
 ;;   M-x org-babel-tangle   (with private.org as the current buffer)
 
+;; Suppress the "following symlink" prompt for version-controlled org files.
+(setq vc-follow-symlinks t)
+
 (require 'org)
 (org-babel-load-file (expand-file-name "emacs.org" user-emacs-directory))
 EOF
