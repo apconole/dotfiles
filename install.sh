@@ -31,6 +31,28 @@ else
     ln -s "$dir0/bashrc.d" "$HOME/.bashrc.d"
 fi
 
+if test ! -e "$HOME/.bashrc.d/.colors.lib" ; then
+    printf "$Color_Off_[$Green_ + $Color_Off_] Adding colors lib.\n"
+    ln -s "$dir0/bashrc.d/.colors.lib" "$HOME/.bashrc.d/.colors.lib"
+fi
+
+if test ! -e "$HOME/.bashrc.d/.git.lib" ; then
+    printf "$Color_Off_[$Green_ + $Color_Off_] Adding git-ps lib.\n"
+    ln -s "$dir0/bashrc.d/.git.lib" "$HOME/.bashrc.d/.git.lib"
+fi
+
+if test ! -e "$HOME/.bashrc.d/ps1.conf" ; then
+    printf "$Color_Off_[$Green_ + $Color_Off_] Adding PS1 config.\n"
+    ln -s "$dir0/bashrc.d/ps1.conf" "$HOME/.bashrc.d/ps1.conf"
+fi
+
+# Generate a bashrc.d env-vars file
+if test ! -e "$HOME/.bashrc.d/env.vars" ; then
+    cat > "$HOME/.bashrc.d/env.vars" <<EOF
+# Extra variables to add to the bash environment
+EOF
+fi
+
 #setup emacs init files
 printf "$Color_Off_[$Green_ + $Color_Off_] Setup the initial Emacs details.\n"
 mkdir -p "$HOME/.emacs.d"
@@ -74,7 +96,101 @@ if test -e "$dir0/private.org" ; then
               -l org --eval "(org-babel-tangle)"
     fi
 else
-    printf "$Color_Off_[$Red_ - $Color_off_]$Red_ The private.org file hasn't been created.  See private.org.example and rerun install after making private.org.$Color_Off_\n"
+    printf "$Color_Off_[$Red_ - $Color_Off_] private.org not found.\n"
+    if test -e "$dir0/private.org.example" ; then
+        read -rp "Create private.org from example now? [y/N] " _create_private
+        if [[ "$_create_private" =~ ^[Yy]$ ]]; then
+            read -rp "Full name: " _priv_name
+            read -rp "Email address: " _priv_email
+            read -rp "SMTP server: " _priv_smtp_server
+            read -rp "SMTP port [587]: " _priv_smtp_port
+            _priv_smtp_port="${_priv_smtp_port:-587}"
+            read -rp "IMAP server: " _priv_imap_server
+            read -rp "GPG key ID (fingerprint or email): " _priv_gpg_key
+
+            _priv_from="$_priv_name <$_priv_email>"
+            _priv_smtp_method="via $_priv_smtp_server $_priv_smtp_port starttls"
+            _priv_smtp_accounts="(\"$_priv_email\" \"$_priv_name\" \"$_priv_smtp_server\" $_priv_smtp_port)"
+
+            sed \
+                -e "s|@EMAIL_ADDRESS@|$_priv_email|g" \
+                -e "s|@EMAIL_NAME@|$_priv_name|g" \
+                -e "s|@SMTP_ACCOUNTS@|$_priv_smtp_accounts|g" \
+                -e "s|@SMTP_SERVER@|$_priv_smtp_server|g" \
+                -e "s|@SMTP_SERVICE_PORT@|$_priv_smtp_port|g" \
+                -e "s|@IMAP_SERVER@|$_priv_imap_server|g" \
+                -e "s|@ADDRESS@|$_priv_email|g" \
+                -e "s|@FROM_ADDRESS_LINE@|$_priv_from|g" \
+                -e "s|@SMTP_METHOD@|$_priv_smtp_method|g" \
+                -e "s|@USER_GPG_KEYID@|$_priv_gpg_key|g" \
+                -e "s|@HOME@|$HOME|g" \
+                "$dir0/private.org.example" > "$dir0/private.org"
+
+            ln -s "$dir0/private.org" "$HOME/.emacs.d/private.org"
+            emacs -Q --batch "$HOME/.emacs.d/private.org" \
+                  -l org --eval "(org-babel-tangle)"
+            printf "$Color_Off_[$Green_ + $Color_Off_] Created and tangled private.org.\n"
+        else
+            printf "$Color_Off_[$Red_ - $Color_Off_] Skipping private.org - rerun install after creating it from private.org.example.\n"
+        fi
+    fi
+fi
+
+# Setup ~/.authinfo.gpg
+printf "$Color_Off_[$Green_ + $Color_Off_] Checking for GPG.\n"
+if command -v gpg >/dev/null 2>&1; then
+    if test -e "$HOME/.authinfo.gpg" ; then
+        printf "$Color_Off_[$Red_ - $Color_Off_] ~/.authinfo.gpg already exists, skipping.\n"
+    else
+        read -rp "Setup ~/.authinfo.gpg for email credentials? [y/N] " _setup_authinfo
+        if [[ "$_setup_authinfo" =~ ^[Yy]$ ]]; then
+            # Reuse values from private.org creation if available, otherwise prompt
+            if [ -z "$_priv_gpg_key" ]; then
+                read -rp "GPG key ID for encryption: " _priv_gpg_key
+            fi
+            if [ -z "$_priv_imap_server" ]; then
+                read -rp "IMAP server: " _priv_imap_server
+            fi
+            if [ -z "$_priv_smtp_server" ]; then
+                read -rp "SMTP server: " _priv_smtp_server
+            fi
+            if [ -z "$_priv_smtp_port" ]; then
+                read -rp "SMTP server Port [587]: " _priv_smtp_port
+                _priv_smtp_port="${_priv_smtp_port:-587}"
+            fi
+            if [ -z "$_priv_email" ]; then
+                read -rp "Email login (username): " _priv_email
+            fi
+
+            read -rsp "IMAP password: " _authinfo_imap_pass
+            printf "\n"
+            read -rsp "SMTP password (leave blank if same as IMAP): " _authinfo_smtp_pass
+            printf "\n"
+            [ -z "$_authinfo_smtp_pass" ] && _authinfo_smtp_pass="$_authinfo_imap_pass"
+
+            _authinfo_tmp=$(mktemp)
+            printf "machine %s login %s password %s\n" \
+                "$_priv_imap_server" "$_priv_email" "$_authinfo_imap_pass" > "$_authinfo_tmp"
+            printf "machine %s login %s password %s port %s\n" \
+                "$_priv_smtp_server" "$_priv_email" "$_authinfo_smtp_pass" >> "$_authinfo_tmp" "$_priv_smtp_port"
+
+            gpg --recipient "$_priv_gpg_key" --encrypt --output "$HOME/.authinfo.gpg" "$_authinfo_tmp"
+            shred -u "$_authinfo_tmp"
+            printf "$Color_Off_[$Green_ + $Color_Off_] Created ~/.authinfo.gpg.\n"
+        fi
+    fi
+else
+    printf "$Color_Off_[$Yellow_ ! $Color_Off_] gpg not found - install gnupg for .authinfo.gpg support.\n"
+fi
+
+# Add Emacs as editor
+if test -e "$HOME/.bashrc.d/env.vars"; then
+    if grep "EDITOR" "$HOME/.bashrc.d/env.vars" >/dev/null 2>&1 ; then
+        printf "$Color_off_[$Red_ - $Color_Off_] Skipping EDITOR.\n"
+    else
+        echo "export EDITOR=\"emacs\"" >> "$HOME/.bashrc.d/env.vars"
+        printf "$Color_off_[$Green_ - $Color_Off_] EDITOR is emacs.\n"
+    fi
 fi
 
 # Setup auto-loading stuff
@@ -213,24 +329,6 @@ EOF
 else
     printf "${Color_Off_}[${Yellow_} ! ${Color_Off_}] Bitwarden not found - install it for password manager autostart.\n"
 fi
-
-# Generate a bashrc.d env-vars file
-if test ! -e "$HOME/.bashrc.d/env.vars" ; then
-    cat > "$HOME/.bashrc.d/env.vars" <<EOF
-# Extra variables to add to the bash environment
-EOF
-fi
-
-# Add Emacs as editor
-if test -e "$HOME/.bashrc.d/env.vars"; then
-    if grep "EDITOR" "$HOME/.bashrc.d/env.vars" >/dev/null 2>&1 ; then
-        printf "$Color_off_[$Red_ - $Color_Off_] Skipping EDITOR.\n"
-    else
-        echo "export EDITOR=\"emacs\"" >> "$HOME/.bashrc.d/env.vars"
-        printf "$Color_off_[$Green_ - $Color_Off_] EDITOR is emacs.\n"
-    fi
-fi
-        
 
 # Add extra variables like SSH_AUTH_SOCK
 if test -n "$_bw_exec" -a -e "$HOME/.bashrc.d/env.vars"; then
