@@ -1,0 +1,148 @@
+#+TITLE: Private Emacs Configuration
+#+PROPERTY: header-args:emacs-lisp :tangle private.el :results silent
+#+STARTUP: overview
+
+This file contains sensitive configuration that should *not* be committed to
+version control: email accounts, IMAP/SMTP server addresses, IRC credentials,
+GPG key IDs, and local filesystem paths.
+
+It is loaded by =emacs.org= at startup (via the generated =private.el=).
+
+*To regenerate =private.el= after editing this file:*
+Open this buffer and run =M-x org-babel-tangle=.
+
+* Identity
+
+#+begin_src emacs-lisp
+(setq user-mail-address "@EMAIL_ADDRESS@"
+      user-full-name    "@EMAIL_NAME@")
+#+end_src
+
+* Email Accounts (SMTP)
+
+A list of =(address full-name smtp-server port)= tuples.  The multi-account
+SMTP advice in =emacs.org= inspects the =From:= header before each send and
+picks the matching entry.
+
+Also enable the multi-SMTP feature flag here, since it requires the account
+list to be populated first.
+
+#+begin_src emacs-lisp
+  (setq smtp-accounts
+        '(
+          @SMTP_ACCOUNTS@
+          ))
+
+  (setq simple-emacs-multiple-smtp t)
+#+end_src
+
+* Gnus / IMAP
+
+Setup your email details for gnus.  You'll want to setup
+the =smtpmail-smtp-server= at a minimum.  Commonly, gmail
+will use =smtpmail-smtp-server= value of *smtp.gmail.com*
+with =smtpmail-smtp-service= of *587* (which is the TLS
+service).
+
+Importantly, the username / password should be entered into
+your =.authinfo.gpg= file (and the GPG file is the recommended
+mechanism).
+
+#+begin_src emacs-lisp
+  (setq send-mail-function         'smtpmail-send-it
+        message-send-mail-function 'smtpmail-send-it
+        smtpmail-smtp-server       "@SMTP_SERVER@"
+        smtpmail-smtp-service      @SMTP_SERVICE_PORT@
+        ispell-local-dictionary    "american"
+        gnus-select-method
+        '(nnimap "bytheborg"
+                 (nnimap-address      "@IMAP_SERVER@")
+                 (nnimap-authinfo-file "~/.authinfo.gpg")
+                 (nnimap-server-port  993)
+                 (nnimap-stream       ssl))
+        gnus-posting-styles
+        '((".*"
+           (address "@ADDRESS@")
+           (From "@FROM_ADDRESS_LINE@")
+           ("X-Message-SMTP-Method" "@SMTP_METHOD@"))))
+#+end_src
+
+* GPG / PGP Signing
+
+Key fingerprint used for signing outgoing mail.
+
+#+begin_src emacs-lisp
+(setq epg-user-id                   '"@USER_GPG_KEYID@"
+      mml-secure-openpgp-signers    '("@USER_GPG_KEYID@"))
+#+end_src
+
+* IRC (rcirc)
+
+** NickServ Authentication
+
+#+begin_src emacs-lisp
+(setq rcirc-authinfo
+      '())
+#+end_src
+
+** Server List
+
+Active servers and channels.  Commented-out entries are kept for reference
+(internal RedHat bouncer variants, old Freenode address, etc.).
+
+#+begin_src emacs-lisp
+(setq rcirc-server-alist
+      '(@IRC_SERVERS@))
+#+end_src
+
+* Jabber
+
+#+begin_src emacs-lisp
+(setq jabber-account-list
+      '())
+#+end_src
+
+* C/C++ Style Directories
+
+Directories where Linux kernel coding style applies (8-space hard tabs,
+=linux= c-default-style).  See the C/C++ section of =emacs.org= for details.
+
+#+begin_src emacs-lisp
+(add-to-list 'simple-emacs-linux-cstyle-list "@HOME@/git/linux")
+#+end_src
+
+* Slack
+
+Each entry in =simple-emacs-slack-teams= is a plist passed to
+=slack-register-team=.  Add one entry per workspace.
+
+** How to get a token and cookie
+
+1. Open Slack in a browser and sign in to the workspace.
+2. Open the browser's Developer Tools (F12) → Network tab.
+3. Filter for =https://edgeapi.slack.com= requests; open any one and copy the
+   =Authorization= header value — this is your =:token= (=xoxc-...=).
+4. In the browser's Application / Storage tab, copy the value of the
+   =d= cookie from =https://app.slack.com= — this is your =:cookie=.
+5. The token beginning with =xoxp-= (legacy user tokens) works without a
+   cookie; =xoxc-= (client tokens) requires the cookie as well.
+
+** Workspace List
+
+#+begin_src emacs-lisp
+(setq simple-emacs-slack-teams
+      '(
+        ;; Example — replace with real values:
+        ;; (:name "my-workspace"
+        ;;  :token "xoxp-XXXXXXXXXXX-XXXXXXXXXXX-XXXXXXXXXXX-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+        ;;  :cookie "xoxd-..."
+        ;;  :subscribed-channels '(general random))
+        ))
+#+end_src
+
+* Org-mode Files
+
+#+begin_src emacs-lisp
+(add-to-list 'org-contacts-files "~/contacts.org")
+(setq org-agenda-files '("~/diary.org"))
+#+end_src
