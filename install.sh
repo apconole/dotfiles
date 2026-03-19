@@ -112,7 +112,7 @@ else
             read -rp "GPG key ID (fingerprint or email): " _priv_gpg_key
 
             _priv_from="$_priv_name <$_priv_email>"
-            _priv_smtp_method="via $_priv_smtp_server $_priv_smtp_port starttls"
+            _priv_smtp_method="smtp $_priv_smtp_server $_priv_smtp_port $_priv_email"
             _priv_smtp_accounts="(\"$_priv_email\" \"$_priv_name\" \"$_priv_smtp_server\" $_priv_smtp_port)"
 
             sed \
