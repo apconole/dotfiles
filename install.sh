@@ -53,6 +53,135 @@ if test ! -e "$HOME/.bashrc.d/env.vars" ; then
 EOF
 fi
 
+# Detect distribution and install required packages
+printf "$Color_Off_[$Green_ + $Color_Off_] Detecting distribution.\n"
+_pkg_family="unknown"
+_pkg_install=""
+_pkg_check=""
+
+if [ -f /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    case "$ID" in
+        fedora|rhel|centos|rocky|almalinux)  _pkg_family="fedora" ;;
+        debian|ubuntu|linuxmint|pop)         _pkg_family="debian" ;;
+        arch|manjaro|endeavouros|artix)      _pkg_family="arch"   ;;
+        *)
+            # ID_LIKE covers derivatives (e.g. ID=fedora in a spin)
+            case "${ID_LIKE-}" in
+                *fedora*|*rhel*)  _pkg_family="fedora" ;;
+                *debian*|*ubuntu*) _pkg_family="debian" ;;
+                *arch*)            _pkg_family="arch"   ;;
+            esac
+            ;;
+    esac
+fi
+
+# Fall back to probing the package manager if os-release didn't resolve
+if [ "$_pkg_family" = "unknown" ]; then
+    if   command -v dnf    >/dev/null 2>&1; then _pkg_family="fedora"
+    elif command -v apt-get >/dev/null 2>&1; then _pkg_family="debian"
+    elif command -v pacman  >/dev/null 2>&1; then _pkg_family="arch"
+    fi
+fi
+
+case "$_pkg_family" in
+    fedora) _pkg_install="sudo dnf install -y";          _pkg_check="rpm -q" ;;
+    debian) _pkg_install="sudo apt-get install -y";      _pkg_check="dpkg-query -W" ;;
+    arch)   _pkg_install="sudo pacman -S --noconfirm";   _pkg_check="pacman -Q" ;;
+esac
+
+if [ "$_pkg_family" = "unknown" ]; then
+    printf "$Color_Off_[$Yellow_ ! $Color_Off_] Could not detect distribution - skipping package installation.\n"
+else
+    printf "$Color_Off_[$Green_ + $Color_Off_] Detected family: $_pkg_family.\n"
+
+    # Check each package and collect missing ones, then install in one shot.
+    _check_and_install() {
+        local desc="$1"; shift
+        local missing=""
+        for pkg in "$@"; do
+            $_pkg_check "$pkg" >/dev/null 2>&1 || missing="$missing $pkg"
+        done
+        if [ -n "$missing" ]; then
+            printf "$Color_Off_[$Green_ + $Color_Off_] Installing $desc:$missing\n"
+            # shellcheck disable=SC2086
+            $_pkg_install $missing
+        else
+            printf "$Color_Off_[$Green_ + $Color_Off_] $desc: all present.\n"
+        fi
+    }
+
+    case "$_pkg_family" in
+        fedora)
+            _check_and_install "kernel development" \
+                gcc make flex bison bc perl \
+                elfutils-libelf-devel openssl-devel ncurses-devel \
+                dwarves coccinelle sparse ctags cscope \
+                python3-sphinx git patch
+
+            _check_and_install "DPDK development" \
+                numactl-devel libpcap-devel python3-pyelftools \
+                meson ninja-build pkg-config \
+                libbpf-devel libmnl-devel clang llvm
+
+            _check_and_install "Open vSwitch development" \
+                autoconf automake libtool libcap-ng-devel \
+                graphviz python3-twisted python3-six \
+                libnl3-devel libunwind-devel
+
+            _check_and_install "developer tools" \
+                gdb valgrind strace perf bpftrace bpftool ccache \
+                emacs gnupg2 git-email
+            ;;
+
+        debian)
+            _check_and_install "kernel development" \
+                gcc make flex bison bc perl \
+                libelf-dev libssl-dev libncurses-dev \
+                dwarves coccinelle sparse universal-ctags cscope \
+                python3-sphinx git patch
+
+            _check_and_install "DPDK development" \
+                libnuma-dev libpcap-dev python3-pyelftools \
+                meson ninja-build pkg-config \
+                libbpf-dev libmnl-dev clang llvm
+
+            _check_and_install "Open vSwitch development" \
+                autoconf automake libtool libcap-ng-dev \
+                graphviz python3-twisted python3-six \
+                libnl-3-dev libunwind-dev
+
+            _check_and_install "developer tools" \
+                gdb valgrind strace linux-perf bpftrace bpftool ccache \
+                emacs gnupg2 git-email
+            ;;
+
+        arch)
+            _check_and_install "kernel development" \
+                gcc make flex bison bc perl \
+                libelf openssl ncurses \
+                pahole coccinelle sparse ctags cscope \
+                python-sphinx git patch
+
+            _check_and_install "DPDK development" \
+                numactl libpcap python-pyelftools \
+                meson ninja pkgconf \
+                libbpf libmnl clang llvm
+
+            _check_and_install "Open vSwitch development" \
+                autoconf automake libtool libcap-ng \
+                graphviz python-twisted python-six \
+                libnl libunwind
+
+            # git send-email is included in the arch 'git' package
+            _check_and_install "developer tools" \
+                gdb valgrind strace perf bpftrace bpftool ccache \
+                emacs gnupg
+            ;;
+    esac
+fi
+
 #setup emacs init files
 printf "$Color_Off_[$Green_ + $Color_Off_] Setup the initial Emacs details.\n"
 mkdir -p "$HOME/.emacs.d"
