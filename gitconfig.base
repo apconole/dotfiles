@@ -1,0 +1,33 @@
+[core]
+	editor = emacs
+	whitespace = fix,trailing-space,cr-at-eol
+
+[init]
+        defaultBranch = main
+
+[color]
+	ui = auto
+
+[push]
+	default = simple
+
+[pull]
+	rebase = true
+
+[alias]
+	lg = log --oneline --graph --decorate --all
+	st = status -sb
+	co = checkout
+	br = branch -vv
+	fp = format-patch --cover-letter -o /tmp/patches/
+	lo = log --oneline
+
+[format]
+	signOff = true
+	numbered = auto
+
+[sendemail]
+	chainreplyto = false
+        suppresscc = all
+	annotate = yes
+	confirm = always

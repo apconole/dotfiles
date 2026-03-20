@@ -333,6 +333,96 @@ else
     printf "${Color_Off_}[${Yellow_} ! ${Color_Off_}] Bitwarden not found - install it for password manager autostart.\n"
 fi
 
+# Setup XFCE keyboard shortcuts
+printf "${Color_Off_}[${Green_} + ${Color_Off_}] Checking for xfconf-query.\n"
+if command -v xfconf-query >/dev/null 2>&1; then
+    # Helper: set a keybind idempotently, warn if already bound to something else
+    _xfce_keybind() {
+        local key="$1" cmd="$2"
+        local prop="/commands/custom/$key"
+        local existing
+        existing=$(xfconf-query -c xfce4-keyboard-shortcuts -p "$prop" 2>/dev/null)
+        if [ -n "$existing" ]; then
+            if [ "$existing" = "$cmd" ]; then
+                printf "${Color_Off_}[${Red_} - ${Color_Off_}] $key already bound to $cmd, skipping.\n"
+            else
+                printf "${Color_Off_}[${Yellow_} ! ${Color_Off_}] $key already bound to '$existing' => changing ('$cmd').\n"
+		xfconf-query -c xfce4-keyboard-shortcuts -p "$prop" -n -t string -s "$cmd"
+            fi
+        else
+            xfconf-query -c xfce4-keyboard-shortcuts -p "$prop" -n -t string -s "$cmd"
+            printf "${Color_Off_}[${Green_} + ${Color_Off_}] Bound $key -> $cmd\n"
+        fi
+    }
+
+    # Detect terminal
+    _term_cmd=""
+    for _t in xfce4-terminal gnome-terminal alacritty kitty xterm; do
+        if command -v "$_t" >/dev/null 2>&1; then
+            _term_cmd="$_t"
+            break
+        fi
+    done
+    if [ -z "$_term_cmd" ]; then
+        read -rp "Terminal command (none detected): " _term_cmd
+    else
+        read -rp "Terminal command [$_term_cmd]: " _term_input
+        [ -n "$_term_input" ] && _term_cmd="$_term_input"
+    fi
+
+    _xfce_keybind "<Super>e" "emacs"
+    _xfce_keybind "<Super>t" "$_term_cmd"
+else
+    printf "${Color_Off_}[${Yellow_} ! ${Color_Off_}] xfconf-query not found - skipping XFCE keybindings.\n"
+fi
+
+# Setup ~/.gitconfig
+printf "$Color_Off_[$Green_ + $Color_Off_] Setting up git configuration.\n"
+if test -e "$HOME/.gitconfig"; then
+    printf "$Color_Off_[$Red_ - $Color_Off_] ~/.gitconfig already exists, skipping.\n"
+else
+    # Try to pull values from private.el first, then fall back to shell
+    # variables set during private.org creation, then prompt.
+    # Uses Emacs in batch mode to evaluate the variable so any valid elisp works.
+    _parse_privel() {
+        emacs -Q --batch \
+              --load "$HOME/.emacs.d/private.el" \
+              --eval "(princ $1)" 2>/dev/null
+    }
+
+    if [ -z "$_priv_name" ];        then _priv_name=$(_parse_privel "user-full-name"); fi
+    if [ -z "$_priv_email" ];       then _priv_email=$(_parse_privel "user-mail-address"); fi
+    if [ -z "$_priv_gpg_key" ];     then _priv_gpg_key=$(_parse_privel "epg-user-id"); fi
+    if [ -z "$_priv_smtp_server" ]; then _priv_smtp_server=$(_parse_privel "smtpmail-smtp-server"); fi
+    if [ -z "$_priv_smtp_port" ];   then _priv_smtp_port=$(_parse_privel "smtpmail-smtp-service"); fi
+
+    [ -z "$_priv_name" ]        && read -rp "Git user name: " _priv_name
+    [ -z "$_priv_email" ]       && read -rp "Git email: " _priv_email
+    [ -z "$_priv_gpg_key" ]     && read -rp "GPG signing key ID: " _priv_gpg_key
+    [ -z "$_priv_smtp_server" ] && read -rp "SMTP server for git send-email: " _priv_smtp_server
+    [ -z "$_priv_smtp_port" ]   && { read -rp "SMTP port [587]: " _priv_smtp_port; _priv_smtp_port="${_priv_smtp_port:-587}"; }
+
+    cat > "$HOME/.gitconfig" <<EOF
+[include]
+	path = $dir0/gitconfig.base
+
+[user]
+	name = $_priv_name
+	email = $_priv_email
+	signingkey = $_priv_gpg_key
+
+[commit]
+	gpgsign = true
+
+[sendemail]
+	smtpserver = $_priv_smtp_server
+	smtpserverport = $_priv_smtp_port
+	smtpencryption = tls
+	smtpuser = $_priv_email
+EOF
+    printf "$Color_Off_[$Green_ + $Color_Off_] Created ~/.gitconfig.\n"
+fi
+
 # Add extra variables like SSH_AUTH_SOCK
 if test -n "$_bw_exec" -a -e "$HOME/.bashrc.d/env.vars"; then
     if grep "SSH_AUTH_SOCK" "$HOME/.bashrc.d/env.vars" >/dev/null 2>/dev/null ; then
