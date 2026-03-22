@@ -325,6 +325,24 @@ if test -e "$HOME/.bashrc.d/env.vars"; then
     fi
 fi
 
+# Setup ~/bin and add-mount utility
+printf "$Color_Off_[$Green_ + $Color_Off_] Setting up ~/bin directory.\n"
+mkdir -p "$HOME/bin"
+
+if test ! -e "$HOME/.bashrc.d/path.conf" ; then
+    printf "$Color_Off_[$Green_ + $Color_Off_] Adding PATH config for ~/bin.\n"
+    ln -s "$dir0/bashrc.d/path.conf" "$HOME/.bashrc.d/path.conf"
+else
+    printf "$Color_Off_[$Red_ - $Color_Off_] path.conf already exists, skipping.\n"
+fi
+
+if test ! -e "$HOME/bin/add-mount" ; then
+    printf "$Color_Off_[$Green_ + $Color_Off_] Linking add-mount into ~/bin.\n"
+    ln -s "$dir0/add-mount.sh" "$HOME/bin/add-mount"
+else
+    printf "$Color_Off_[$Red_ - $Color_Off_] ~/bin/add-mount already exists, skipping.\n"
+fi
+
 # Setup auto-loading stuff
 AUTOSTART_DIR="$HOME/.config/autostart"
 mkdir -p "$AUTOSTART_DIR"
