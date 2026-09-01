@@ -413,7 +413,7 @@ Project-aware file navigation and search.  =C-c f= is the primary shortcut.
 #+begin_src emacs-lisp
 (simple-emacs-package-install 'projectile)
 (when simple-emacs-autoload-all-dev
-  (projectile-global-mode))
+  (projectile-mode))
 (global-set-key (kbd "C-c f") 'projectile-find-file)
 #+end_src
 
