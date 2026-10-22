@@ -1052,31 +1052,36 @@ frame.
 When =simple-emacs-multiple-smtp= is non-nil, an advice on
 =smtpmail-via-smtp= inspects the =From:= header and switches the SMTP server
 and port to match the sending account.  The account table is defined in
-=private.el= as =smtp-accounts=, a list of =(address full-name server port)=
-tuples.
+=private.el= as =smtp-accounts=, a list of
+=(address full-name server port stream-type)= tuples.
 
 #+begin_src emacs-lisp
-(require 'cl)
-(setq smtpmail-stream-type 'starttls)
+      (require 'cl)
+      (setq smtpmail-stream-type 'starttls) ;; just set as the default
 
-(defun simple-emacs-multi-mail ()
-  "Select SMTP settings based on the From: header before sending."
-  (when simple-emacs-multiple-smtp
-    (save-excursion
-      (cl-loop with from = (save-restriction
-                              (message-narrow-to-headers)
-                              (message-fetch-field "from"))
-               for (addr fname server port) in smtp-accounts
-               when (or (string-match addr from)
-                        (string-match (format "%s <%s>" fname addr) from))
-               do (setq user-mail-address      addr
-                        user-full-name         fname
-                        smtpmail-smtp-server   server
-                        smtpmail-smtp-service  port)))))
+      (defun simple-emacs-multi-mail ()
+        "Select SMTP settings based on the From: header before sending."
+        (when simple-emacs-multiple-smtp
+          (save-excursion
+            (cl-loop with from = (save-restriction
+                                    (message-narrow-to-headers)
+                                    (message-fetch-field "from"))
+                     for (addr fname server port stream-type user) in smtp-accounts
+                     when (or (string-match addr from)
+                              (string-match (format "%s <%s>" fname addr) from))
+                     do
+                     (setq user-mail-address      addr
+                           user-full-name         fname
+                           smtpmail-smtp-server   server
+                           smtpmail-smtp-service  port)
+                     (when stream-type
+                       (setq smtpmail-stream-type stream-type))
+                     (when user
+                       (setq smtpmail-smtp-user user))))))
 
-(defadvice smtpmail-via-smtp
-    (before change-smtp-by-message-from-field (recipient buffer &optional ask) activate)
-  (with-current-buffer buffer (simple-emacs-multi-mail)))
+      (defadvice smtpmail-via-smtp
+          (before change-smtp-by-message-from-field (recipient buffer &optional ask) activate)
+        (with-current-buffer buffer (simple-emacs-multi-mail)))
 #+end_src
 
 ** Patch Handling
